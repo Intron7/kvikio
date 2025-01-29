@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cassert>
 #include <future>
+#include <memory>
 #include <numeric>
 #include <system_error>
 #include <utility>
@@ -72,6 +73,13 @@ std::future<std::size_t> submit_task(F op,
   });
 }
 
+template <typename F>
+auto make_copyable_lambda(F&& f)
+{
+  auto sp = std::make_shared<F>(std::forward<F>(f));
+  return [sp]() -> decltype(auto) { return (*sp)(); };
+}
+
 }  // namespace detail
 
 /**
@@ -123,14 +131,15 @@ std::future<std::size_t> parallel_io(F op,
   }
 
   // Finally, we sum the result of all tasks.
-  auto gather_tasks = [](std::vector<std::future<std::size_t>>&& tasks) -> std::size_t {
-    std::size_t ret = 0;
-    for (auto& task : tasks) {
-      ret += task.get();
-    }
-    return ret;
-  };
-  return std::async(std::launch::deferred, gather_tasks, std::move(tasks));
+  auto gather_tasks =
+    detail::make_copyable_lambda([tasks = std::move(tasks)]() mutable -> std::size_t {
+      std::size_t ret = 0;
+      for (auto& task : tasks) {
+        ret += task.get();
+      }
+      return ret;
+    });
+  return defaults::thread_pool().submit_task(std::move(gather_tasks));
 }
 
 }  // namespace kvikio
